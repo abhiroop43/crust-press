@@ -1,12 +1,12 @@
-extern crate flate2;
-
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use std::env::args;
 use std::fs;
 use std::io;
+use std::io::prelude::*;
+use std::io::{Seek, Write};
+use std::iter::Iterator;
 use std::time::Instant;
+use walkdir::DirEntry;
 use zip;
+// use zip::result::ZipError;
 
 fn main() {
     let exit_code = real_main();
@@ -28,10 +28,12 @@ fn real_main() -> i32 {
     } else {
         mode = args[3].to_string();
     }
-    println!("{}", mode);
+
+    let start = Instant::now();
+
     if mode == "compress" {
         println!("Compressing...");
-        compress();
+        compress(args.clone());
     } else if mode == "decompress" {
         println!("Deompressing...");
         decompress(args.clone());
@@ -39,29 +41,86 @@ fn real_main() -> i32 {
         eprintln!("Invalid mode");
         return 2;
     }
-
+    println!("Elapsed time: {:?}", start.elapsed());
     return 0;
 }
 
-fn compress() {
-    // open and read the file
-    let mut input = io::BufReader::new(fs::File::open(args().nth(1).unwrap()).unwrap());
+fn compress(args: Vec<String>) {
+    let src_dir = &*args[1];
+    let dst_file = &*args[2];
+    match start_compression(src_dir, dst_file, zip::CompressionMethod::Bzip2) {
+        Ok(_) => println!("done: {src_dir} written to {dst_file}"),
+        Err(e) => println!("Error: {e:?}"),
+    };
+}
 
-    // set the file output name
-    let output = fs::File::create(args().nth(2).unwrap()).unwrap();
+fn zip_dir<T>(
+    it: &mut dyn Iterator<Item = DirEntry>,
+    prefix: &str,
+    writer: T,
+    method: zip::CompressionMethod,
+) -> zip::result::ZipResult<()>
+where
+    T: Write + Seek,
+{
+    let mut zip = zip::ZipWriter::new(writer);
+    let options = zip::write::FileOptions::default()
+        .compression_method(method)
+        .unix_permissions(0o755);
 
-    let mut encoder = GzEncoder::new(output, Compression::best());
-    let start = Instant::now();
-    io::copy(&mut input, &mut encoder).unwrap();
-    let output = encoder.finish().unwrap();
-    println!(
-        "Source len: {:?}",
-        input.get_ref().metadata().unwrap().len()
-    );
+    let mut buffer = Vec::new();
+    for entry in it {
+        let path = entry.path();
+        // let name = path;
+        let name = path.strip_prefix(std::path::Path::new(prefix)).unwrap();
 
-    println!("Target len: {:?}", output.metadata().unwrap().len());
+        // Write file or directory explicitly
+        // Some unzip tools unzip files with directory paths correctly, some do not!
+        if path.is_file() {
+            println!("adding file {path:?} as {name:?} ...");
+            #[allow(deprecated)]
+            zip.start_file_from_path(name, options)?;
+            let mut f = fs::File::open(path)?;
 
-    println!("Elapsed time: {:?}", start.elapsed())
+            f.read_to_end(&mut buffer)?;
+            zip.write_all(&buffer)?;
+            buffer.clear();
+        } else if !name.as_os_str().is_empty() {
+            // Only if not root! Avoids path spec / warning
+            // and mapname conversion failed error on unzip
+            println!("adding dir {path:?} as {name:?} ...");
+            #[allow(deprecated)]
+            zip.add_directory_from_path(name, options)?;
+        }
+    }
+    zip.finish()?;
+    Result::Ok(())
+}
+
+fn start_compression(
+    src_dir: &str,
+    dst_file: &str,
+    method: zip::CompressionMethod,
+) -> zip::result::ZipResult<()> {
+    let src = std::path::Path::new(src_dir);
+
+    if src.is_dir() {
+        // return Err(zip::result::ZipError::FileNotFound);
+        let path = std::path::Path::new(dst_file);
+        let file = fs::File::create(path).unwrap();
+
+        let walkdir = walkdir::WalkDir::new(src_dir);
+        let it = walkdir.into_iter();
+
+        zip_dir(&mut it.filter_map(|e| e.ok()), "", file, method)?;
+
+        return Ok(());
+    } else if src.is_file() {
+        // TODO: compress file
+        return Ok(());
+    }
+
+    return Err(zip::result::ZipError::FileNotFound);
 }
 
 fn decompress(args: Vec<String>) {
