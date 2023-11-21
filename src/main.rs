@@ -6,7 +6,6 @@ use std::iter::Iterator;
 use std::time::Instant;
 use walkdir::DirEntry;
 use zip;
-// use zip::result::ZipError;
 
 fn main() {
     let exit_code = real_main();
@@ -14,6 +13,9 @@ fn main() {
 }
 
 fn real_main() -> i32 {
+    // TODO: CLI usage should be:
+    // compress_util -o (compress/decompress) -s (source file/directory) [-d] (destination, should be optional, by degfault to extract in the current working directory)
+
     let args: Vec<_> = std::env::args().collect();
 
     if args.len() < 3 {
@@ -48,7 +50,7 @@ fn real_main() -> i32 {
 fn compress(args: Vec<String>) {
     let src_dir = &*args[1];
     let dst_file = &*args[2];
-    match start_compression(src_dir, dst_file, zip::CompressionMethod::Bzip2) {
+    match start_compression(src_dir, dst_file, zip::CompressionMethod::Zstd) {
         Ok(_) => println!("done: {src_dir} written to {dst_file}"),
         Err(e) => println!("Error: {e:?}"),
     };
